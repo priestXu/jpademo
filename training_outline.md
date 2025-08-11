@@ -1015,51 +1015,752 @@ class UserRepositoryTest {
 
 ##### 第三部分：JPA 查询方法全解析 (3h)
 
-1.  **方法命名规则查询 (Query Methods)**
-    *   根据方法名自动生成查询
-    *   `findBy...`, `countBy...`, `existsBy...`, `deleteBy...`
-    *   组合条件、排序、限制结果集 (`Top`, `First`)
-2.  **`@Query` 注解查询 (JPQL/HQL)**
-    *   使用 JPQL (Java Persistence Query Language) 进行查询
-    *   命名参数 (`:name`) 与索引参数 (`?1`)
-    *   执行更新和删除操作 (`@Modifying` 与 `@Transactional`)
-3.  **原生 SQL 查询 (`nativeQuery`)**
-    *   何时使用原生 SQL
-    *   `@Query(value = "...", nativeQuery = true)`
-    *   原生 SQL 查询的参数绑定
-    *   **重点：** 原生 SQL 查询结果映射到非托管实体或 DTO
-4.  **Specification 动态条件查询**
-    *   `JpaSpecificationExecutor` 接口介绍
-    *   使用 `Specification` 构建动态、可复用的查询条件
-    *   **案例：** 实现一个复杂的多条件动态搜索功能（例如：根据用户名、邮箱、创建时间范围等动态查询）
-5.  **Query by Example (QBE)**
-    *   `Example` 和 `ExampleMatcher` 的使用
-    *   声明式动态查询的又一种选择
-    *   适用场景与局限性
+#### 3.1 方法命名规则查询 (Query Methods)
+
+**3.1.1 核心理念与工作原理**
+
+*   **约定优于配置：** Spring Data JPA 通过解析 Repository 接口中符合特定规范的方法名，自动生成对应的 JPQL 查询。
+*   **工作流程：**
+    1.  应用启动时，Spring Data JPA 扫描所有继承 `Repository` 的接口。
+    2.  解析每个方法的名称，如 `findByUsernameAndStatus`。
+    3.  根据解析出的关键词（`find`, `By`, `Username`, `And`, `Status`）和参数，构建 JPQL 查询语句。
+    4.  在运行时，当调用该方法时，执行预构建的 JPQL。
+
+**3.1.2 常用查询关键词**
+
+| 前缀 | 作用 | 返回值 | 示例 |
+|---|---|---|---|
+| `find...By` | 查询实体 | `List<T>`, `Optional<T>`, `T` | `findByEmail(String email)` |
+| `read...By` | 查询实体 (同 `find`) | 同上 | `readByEmail(String email)` |
+| `get...By` | 查询实体 (同 `find`) | 同上 | `getByEmail(String email)` |
+| `query...By` | 查询实体 (同 `find`) | 同上 | `queryByEmail(String email)` |
+| `count...By` | 统计数量 | `long` | `countByStatus(UserStatus status)` |
+| `exists...By`| 判断是否存在 | `boolean` | `existsByEmail(String email)` |
+| `delete...By`| 删除实体 | `long` (删除数量), `void` | `deleteByStatus(UserStatus status)` |
+
+**3.1.3 条件关键词详解与示例**
+
+*假设有 `User` 实体，包含 `username`, `email`, `age`, `status`, `createdAt` 等字段。*
+
+```java
+public interface UserRepository extends JpaRepository<User, Long> {
+
+    // 1. 等值查询
+    Optional<User> findByEmail(String email);
+
+    // 2. AND 多条件查询
+    Optional<User> findByUsernameAndStatus(String username, UserStatus status);
+
+    // 3. OR 条件查询
+    List<User> findByUsernameOrEmail(String username, String email);
+
+    // 4. 模糊查询 (LIKE)
+    List<User> findByUsernameContaining(String keyword); // LIKE '%keyword%'
+    List<User> findByUsernameStartingWith(String prefix); // LIKE 'prefix%'
+    List<User> findByUsernameEndingWith(String suffix);   // LIKE '%suffix'
+
+    // 5. 忽略大小写
+    List<User> findByUsernameContainingIgnoreCase(String keyword);
+
+    // 6. 范围查询 (BETWEEN, LessThan, GreaterThan)
+    List<User> findByAgeBetween(int startAge, int endAge);
+    List<User> findByCreatedAtAfter(LocalDateTime dateTime);
+    List<User> findByAgeLessThanEqual(int maxAge);
+
+    // 7. IN 查询
+    List<User> findByStatusIn(Collection<UserStatus> statuses);
+
+    // 8. IS NULL / IS NOT NULL
+    List<User> findByAgeIsNull();
+    List<User> findByAgeIsNotNull();
+
+    // 9. 排序
+    List<User> findByStatusOrderByUsernameDesc(UserStatus status);
+
+    // 10. 限制结果集 (Top, First)
+    Optional<User> findTopByOrderByAgeDesc(); // 获取年龄最大的用户
+    List<User> findFirst5ByStatusOrderByCreatedAtDesc(UserStatus status); // 获取最新创建的5个用户
+}
+```
+
+**3.1.4 优点与局限性**
+
+*   **优点：**
+    *   **极简代码：** 无需编写任何 JPQL/SQL。
+    *   **类型安全：** 方法参数和返回值都是强类型的。
+    *   **易于理解：** 方法名即查询意图。
+*   **局限性：**
+    *   **方法名过长：** 复杂查询会导致方法名非常长，难以阅读。
+    *   **功能有限：** 不支持 `JOIN`、分组、子查询等复杂操作。
+    *   **不适合动态查询：** 如果查询条件是可选的，需要为每种组合编写一个方法。
+
+#### 3.2 `@Query` 注解查询 (JPQL/HQL)
+
+**3.2.1 JPQL 简介**
+
+*   **JPQL (Java Persistence Query Language)：** 面向对象的查询语言，语法类似于 SQL，但操作的是**实体 (Entity)** 和**属性 (Attribute)**，而不是表和列。
+*   **与 SQL 的区别：**
+    *   **面向对象：** `FROM User u` 而不是 `FROM users`。
+    *   **大小写敏感：** 实体名和属性名是大小写敏感的。
+    *   **数据库无关：** 由 JPA 实现（如 Hibernate）转换为特定数据库的 SQL 方言。
+
+**3.2.2 使用 `@Query` 进行查询**
+
+*   当方法命名规则无法满足需求时，使用 `@Query` 自定义 JPQL。
+
+```java
+public interface UserRepository extends JpaRepository<User, Long> {
+
+    // 1. 使用命名参数 (推荐)
+    @Query("SELECT u FROM User u WHERE u.email = :email")
+    Optional<User> findUserByEmailAddress(@Param("email") String email);
+
+    // 2. 使用索引参数 (不推荐，可读性差)
+    @Query("SELECT u FROM User u WHERE u.username = ?1 AND u.status = ?2")
+    List<User> findUsersByUsernameAndStatus(String username, UserStatus status);
+
+    // 3. LIKE 查询
+    @Query("SELECT u FROM User u WHERE u.username LIKE %:keyword%")
+    List<User> findUsersByUsernameKeyword(@Param("keyword") String keyword);
+
+    // 4. 投影部分字段 (返回 Object[])
+    @Query("SELECT u.username, u.email FROM User u WHERE u.id = :id")
+    Object[] findUsernameAndEmailById(@Param("id") Long id);
+}
+```
+
+**3.2.3 执行更新和删除操作**
+
+*   **`@Modifying` 注解：** 告诉 Spring Data JPA 该查询是**更新**或**删除**操作。
+*   **`@Transactional` 注解：** 所有修改操作必须在事务中执行。通常在 Service 层添加此注解。
+
+```java
+public interface UserRepository extends JpaRepository<User, Long> {
+
+    @Modifying
+    @Query("UPDATE User u SET u.status = :newStatus WHERE u.lastLoginDate < :date")
+    int updateStatusForOldUsers(@Param("newStatus") UserStatus newStatus, @Param("date") LocalDateTime date);
+
+    @Modifying
+    @Query("DELETE FROM User u WHERE u.status = :status")
+    int deleteInactiveUsers(@Param("status") UserStatus status);
+}
+
+// 在 Service 层调用
+@Service
+public class UserService {
+    @Autowired
+    private UserRepository userRepository;
+
+    @Transactional
+    public void deactivateOldUsers() {
+        int updatedCount = userRepository.updateStatusForOldUsers(
+            UserStatus.INACTIVE,
+            LocalDateTime.now().minusYears(1)
+        );
+        // ...
+    }
+}
+```
+**注意：** 使用 `@Query` 进行更新/删除操作会绕过 JPA 的一级缓存和持久化上下文，可能导致缓存与数据库不一致。通常在执行完此类操作后，应手动 `clear()` EntityManager 或谨慎使用。
+
+#### 3.3 原生 SQL 查询 (`nativeQuery`)
+
+**3.3.1 何时使用原生 SQL**
+
+*   **复杂查询：** 需要使用特定数据库的函数、语法或特性 (如窗口函数、公用表表达式 CTE)。
+*   **性能优化：** 手动编写高度优化的 SQL。
+*   **操作非实体管理的表：** 查询视图或执行存储过程。
+
+**3.3.2 基本原生 SQL 查询**
+
+*   设置 `@Query` 注解的 `nativeQuery` 属性为 `true`。
+
+```java
+public interface UserRepository extends JpaRepository<User, Long> {
+
+    // 1. 查询结果映射到实体 (列名需与实体属性匹配或使用别名)
+    @Query(value = "SELECT * FROM users WHERE email = :email", nativeQuery = true)
+    Optional<User> findUserByEmailNative(@Param("email") String email);
+
+    // 2. 使用索引参数
+    @Query(value = "SELECT * FROM users WHERE username = ?1", nativeQuery = true)
+    Optional<User> findByUsernameNative(String username);
+}
+```
+
+**3.3.3 结果映射到 DTO (重点)**
+
+*   当查询结果不是完整的实体时，需要将结果映射到自定义的 DTO (Data Transfer Object)。
+
+**方法一：接口投影 (Interface-based Projection)**
+
+```java
+// 1. 定义 DTO 接口
+public interface UserSummary {
+    String getUsername();
+    String getEmail();
+    int getAge();
+}
+
+// 2. 在 Repository 中使用
+public interface UserRepository extends JpaRepository<User, Long> {
+    @Query(value = "SELECT username, email, age FROM users WHERE status = :status", nativeQuery = true)
+    List<UserSummary> findUserSummariesByStatus(@Param("status") String status);
+}
+```
+**要求：** `SELECT` 子句中的列别名必须与接口中的 `get` 方法名匹配 (遵循 JavaBean 规范)。
+
+**方法二：使用 `@SqlResultSetMapping` 和 `@ConstructorResult`**
+
+*   这是最灵活、最强大的方式，但配置也最复杂。
+
+```java
+// 1. 定义 DTO 类 (必须有匹配的构造函数)
+public class UserDto {
+    private String username;
+    private int age;
+    // 构造函数参数顺序和类型必须与查询列匹配
+    public UserDto(String username, int age) {
+        this.username = username;
+        this.age = age;
+    }
+    // getters...
+}
+
+// 2. 在实体类上定义映射关系
+@Entity
+@SqlResultSetMapping(
+    name = "UserDtoMapping",
+    classes = @ConstructorResult(
+        targetClass = UserDto.class,
+        columns = {
+            @ColumnResult(name = "username", type = String.class),
+            @ColumnResult(name = "age", type = Integer.class)
+        }
+    )
+)
+public class User { ... }
+
+// 3. 在 Repository 中引用映射
+public interface UserRepository extends JpaRepository<User, Long> {
+    @Query(name = "User.findUserDtos", nativeQuery = true) // 引用 @NamedNativeQuery
+    List<UserDto> findUserDtos();
+}
+
+// 4. (可选) 在实体上定义命名原生查询
+@Entity
+@NamedNativeQuery(
+    name = "User.findUserDtos",
+    query = "SELECT u.username, u.age FROM users u WHERE u.status = 'ACTIVE'",
+    resultSetMapping = "UserDtoMapping"
+)
+public class User { ... }
+```
+
+#### 3.4 Specification 动态条件查询
+
+**3.4.1 适用场景**
+
+*   当查询条件是动态组合时，例如在一个复杂的搜索表单中，用户可以选择性地填写多个过滤条件。
+*   使用方法命名规则会导致方法爆炸，使用 `@Query` 拼接字符串容易出错且不安全。
+
+**3.4.2 `JpaSpecificationExecutor` 接口**
+
+*   让你的 Repository 接口继承 `JpaSpecificationExecutor<T>`。
+
+```java
+public interface UserRepository extends JpaRepository<User, Long>, JpaSpecificationExecutor<User> {
+}
+```
+
+*   该接口提供了基于 `Specification` 的查询方法：
+    *   `Optional<T> findOne(Specification<T> spec);`
+    *   `List<T> findAll(Specification<T> spec);`
+    *   `Page<T> findAll(Specification<T> spec, Pageable pageable);`
+    *   `List<T> findAll(Specification<T> spec, Sort sort);`
+    *   `long count(Specification<T> spec);`
+
+**3.4.3 构建 `Specification`**
+
+*   `Specification` 是一个函数式接口，使用 JPA Criteria API 来构建查询条件。
+
+**案例：实现复杂的多条件动态搜索**
+
+```java
+// 1. 创建一个 Specification 工具类或直接在 Service 中构建
+public class UserSpecifications {
+
+    public static Specification<User> hasUsername(String username) {
+        return (root, query, criteriaBuilder) -> {
+            if (username == null || username.isEmpty()) {
+                return criteriaBuilder.conjunction(); // 返回一个恒为 true 的条件
+            }
+            return criteriaBuilder.like(root.get("username"), "%" + username + "%");
+        };
+    }
+
+    public static Specification<User> hasStatus(UserStatus status) {
+        return (root, query, criteriaBuilder) -> {
+            if (status == null) {
+                return criteriaBuilder.conjunction();
+            }
+            return criteriaBuilder.equal(root.get("status"), status);
+        };
+    }
+
+    public static Specification<User> createdBetween(LocalDateTime start, LocalDateTime end) {
+        return (root, query, criteriaBuilder) -> {
+            if (start == null && end == null) {
+                return criteriaBuilder.conjunction();
+            }
+            if (start != null && end != null) {
+                return criteriaBuilder.between(root.get("createdAt"), start, end);
+            }
+            if (start != null) {
+                return criteriaBuilder.greaterThanOrEqualTo(root.get("createdAt"), start);
+            }
+            return criteriaBuilder.lessThanOrEqualTo(root.get("createdAt"), end);
+        };
+    }
+}
+
+// 2. 在 Service 中组合 Specification
+@Service
+public class UserService {
+    @Autowired
+    private UserRepository userRepository;
+
+    public Page<User> searchUsers(SearchCriteria criteria, Pageable pageable) {
+        Specification<User> spec = Specification
+            .where(UserSpecifications.hasUsername(criteria.getUsername()))
+            .and(UserSpecifications.hasStatus(criteria.getStatus()))
+            .and(UserSpecifications.createdBetween(criteria.getStartDate(), criteria.getEndDate()));
+
+        return userRepository.findAll(spec, pageable);
+    }
+}
+
+// 3. 定义搜索条件 DTO
+public class SearchCriteria {
+    private String username;
+    private UserStatus status;
+    private LocalDateTime startDate;
+    private LocalDateTime endDate;
+    // getters and setters
+}
+```
+
+#### 3.5 Query by Example (QBE)
+
+**3.5.1 核心理念**
+
+*   **按示例查询 (Query by Example)：** 提供一个填充了查询条件的实体对象（“示例”），JPA 根据该对象中非 null 的属性自动构建查询。
+*   是另一种实现动态查询的方式，比 Specification 更简单，但功能也更受限。
+
+**3.5.2 `Example` 和 `ExampleMatcher` 的使用**
+
+*   `JpaRepository` 默认继承了 `QueryByExampleExecutor<T>` 接口。
+
+**案例：使用 QBE 实现动态搜索**
+
+```java
+@Service
+public class UserService {
+    @Autowired
+    private UserRepository userRepository;
+
+    public List<User> findUsersByExample(User probe) {
+        // 1. 创建 ExampleMatcher 来定义匹配规则
+        ExampleMatcher matcher = ExampleMatcher.matching()
+            .withIgnoreCase("username") // 对 username 字段忽略大小写
+            .withStringMatcher(ExampleMatcher.StringMatcher.CONTAINING) // 对所有字符串使用模糊查询
+            .withIgnoreNullValues() // 忽略 probe 对象中为 null 的属性
+            .withIgnorePaths("age", "createdAt"); // 忽略 age 和 createdAt 属性
+
+        // 2. 创建 Example 对象
+        Example<User> example = Example.of(probe, matcher);
+
+        // 3. 执行查询
+        return userRepository.findAll(example);
+    }
+}
+
+// 调用
+public void search() {
+    User probe = new User();
+    probe.setUsername("john");
+    probe.setStatus(UserStatus.ACTIVE);
+    // probe 中的 email, age 等为 null，会被忽略
+
+    List<User> results = userService.findUsersByExample(probe);
+}
+```
+
+**3.5.3 适用场景与局限性**
+
+*   **适用场景：**
+    *   简单的动态查询，主要是等值和模糊查询。
+    *   快速实现 UI 表单的后端过滤逻辑。
+*   **局限性：**
+    *   不支持范围查询 (`>`, `<`, `BETWEEN`)。
+    *   不支持 `OR` 逻辑（仅支持所有条件的 `AND` 组合）。
+    *   对嵌套/关联属性的支持有限。
+    *   灵活性远不如 `Specification`。
+
+---
 
 ##### 第四部分：高级查询与特性 (2.5h)
 
-1.  **分页与排序**
-    *   `Pageable` 和 `Sort` 对象的使用
-    *   `Page` 和 `Slice` 对象的区别与应用
-    *   结合不同查询方式实现分页
-2.  **多表关联查询**
-    *   **关联关系映射：** `@OneToOne`, `@OneToMany`, `@ManyToOne`, `@ManyToMany`
-    *   `fetch` 策略：`EAGER` vs. `LAZY` (N+1 问题详解与优化)
-    *   在 JPQL 中使用 `JOIN` 和 `LEFT JOIN FETCH`
-3.  **查询结果返回 DTO (Data Transfer Object)**
-    *   **为什么需要 DTO？** 避免暴露实体、按需选择字段
-    *   **JPQL/HQL 构造函数表达式：** `SELECT NEW com.example.UserDTO(...) FROM User u`
-    *   **接口投影 (Interface-based Projections)**
-    *   **Class-based Projections (DTOs)**
-4.  **复杂统计与分组查询**
-    *   `GROUP BY`, `HAVING`
-    *   聚合函数 `COUNT`, `SUM`, `AVG`, `MAX`, `MIN`
-    *   **案例：** 按部门统计员工人数和平均薪资
-5.  **处理 JSON/JSONB 字段 (以 PostgreSQL 为例)**
-    *   使用 `@Type` 注解配合 `hypersistence-utils` 或自定义 `UserType`
-    *   在原生 SQL 中使用数据库特定的 JSON 函数进行查询
-    *   **案例：** 查询 JSON 字段中特定 key 的 value
+#### 4.1 分页与排序
+
+**4.1.1 `Pageable` 和 `Sort` 对象**
+
+*   **`Sort`：** 封装排序逻辑。
+    *   `Sort.by("username").ascending()`
+    *   `Sort.by(Sort.Direction.DESC, "createdAt")`
+    *   `Sort.by("status").and(Sort.by("username").descending())`
+*   **`Pageable`：** 封装分页请求信息（页码、每页大小、排序）。
+    *   `PageRequest.of(int page, int size)`
+    *   `PageRequest.of(int page, int size, Sort sort)`
+    *   **注意：** `page` 是从 0 开始的。
+
+**4.1.2 在 Controller 和 Service 中使用**
+
+```java
+@RestController
+@RequestMapping("/api/users")
+public class UserController {
+    @Autowired
+    private UserService userService;
+
+    @GetMapping
+    public Page<User> getAllUsers(
+        // Spring MVC 会自动将请求参数注入到 Pageable 对象
+        @PageableDefault(size = 10, sort = "createdAt", direction = Sort.Direction.DESC) Pageable pageable
+    ) {
+        return userService.findAllUsers(pageable);
+    }
+}
+
+@Service
+public class UserService {
+    @Autowired
+    private UserRepository userRepository;
+
+    @Transactional(readOnly = true)
+    public Page<User> findAllUsers(Pageable pageable) {
+        return userRepository.findAll(pageable);
+    }
+}
+```
+*   **请求示例：** `GET /api/users?page=0&size=20&sort=username,asc`
+
+**4.1.3 `Page` 和 `Slice` 的区别**
+
+*   **`Page<T>`：**
+    *   继承自 `Slice<T>`。
+    *   除了包含当前页的数据和是否有下一页的信息外，还包含**总记录数 (total elements)** 和**总页数 (total pages)**。
+    *   为了计算总记录数，JPA 会额外执行一条 `COUNT` 查询。
+*   **`Slice<T>`：**
+    *   只知道是否有下一页 (`hasNext()`)，不知道总记录数。
+    *   通常比 `Page<T>` 性能更好，因为它只执行一条查询。
+    *   适用于“无限滚动”加载场景。
+
+```java
+public interface UserRepository extends JpaRepository<User, Long> {
+    // 返回 Page，会执行 count 查询
+    Page<User> findByStatus(UserStatus status, Pageable pageable);
+
+    // 返回 Slice，不会执行 count 查询
+    Slice<User> findByAgeGreaterThan(int age, Pageable pageable);
+}
+```
+
+#### 4.2 多表关联查询
+
+**4.2.1 关联关系映射**
+
+*   **`@ManyToOne` (多对一):** 多个 `Employee` 属于一个 `Department`。
+*   **`@OneToMany` (一对多):** 一个 `Department` 有多个 `Employee`。
+*   **`@OneToOne` (一对一):** 一个 `User` 对应一个 `UserProfile`。
+*   **`@ManyToMany` (多对多):** 一个 `Student` 可以选多门 `Course`，一门 `Course` 可以被多个 `Student` 选。
+
+**示例：`Employee` 和 `Department`**
+
+```java
+@Entity
+public class Department {
+    @Id @GeneratedValue
+    private Long id;
+    private String name;
+
+    @OneToMany(mappedBy = "department", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
+    private List<Employee> employees = new ArrayList<>();
+    // ...
+}
+
+@Entity
+public class Employee {
+    @Id @GeneratedValue
+    private Long id;
+    private String name;
+
+    @ManyToOne(fetch = FetchType.LAZY) // LAZY 是默认值
+    @JoinColumn(name = "department_id") // 外键列
+    private Department department;
+    // ...
+}
+```
+
+**4.2.2 `fetch` 策略与 N+1 问题**
+
+*   **`FetchType.EAGER` (立即加载):** 查询主实体时，立即通过 `JOIN` 加载关联实体。
+    *   **优点：** 简单，不会有 `LazyInitializationException`。
+    *   **缺点：** 即使不需要关联数据也加载，可能造成性能浪费。查询列表时，可能导致笛卡尔积问题。
+*   **`FetchType.LAZY` (懒加载):** 查询主实体时，不加载关联实体，只在**第一次访问**关联实体时才发送额外的 SQL 查询。
+    *   **优点：** 按需加载，性能更高。
+    *   **缺点：** 如果在 Session 关闭后访问关联属性，会抛出 `LazyInitializationException`。**是导致 N+1 问题的根源。**
+
+**N+1 问题详解：**
+
+```java
+// 1. 查询所有部门 (1条 SQL)
+List<Department> departments = departmentRepository.findAll();
+
+// 2. 遍历部门，打印员工姓名
+for (Department dept : departments) {
+    // 每次调用 dept.getEmployees() 都会触发一条新的 SQL 查询员工
+    // 如果有 N 个部门，这里会额外执行 N 条 SQL
+    List<Employee> employees = dept.getEmployees();
+    System.out.println(employees.get(0).getName());
+}
+```
+**总共执行了 1 + N 条 SQL，这就是 N+1 问题。**
+
+**4.2.3 解决 N+1 问题的方案**
+
+**方案一：`JOIN FETCH` (推荐)**
+
+*   在 JPQL 中使用 `JOIN FETCH` 告诉 JPA 在一次查询中同时加载主实体和关联实体。
+
+```java
+@Query("SELECT d FROM Department d LEFT JOIN FETCH d.employees")
+List<Department> findAllWithEmployees();
+```
+*   这条查询会生成一条 `LEFT JOIN` SQL，一次性将所有部门和对应的员工查出，解决了 N+1 问题。
+
+**方案二：`@EntityGraph`**
+
+*   以注解的方式声明需要一同加载的关联属性，侵入性比 `JOIN FETCH` 更小。
+
+```java
+public interface DepartmentRepository extends JpaRepository<Department, Long> {
+    @EntityGraph(attributePaths = { "employees" })
+    @Override
+    List<Department> findAll();
+}
+```
+*   调用 `departmentRepository.findAll()` 时，JPA 会自动生成 `LEFT JOIN` 来加载 `employees`。
+
+**方案三：`@BatchSize`**
+
+*   不是解决 N+1，而是优化它。它将 N 次独立的查询合并为少数几次批量查询。
+
+```java
+@Entity
+public class Department {
+    // ...
+    @OneToMany(...)
+    @BatchSize(size = 20) // 设置批处理大小
+    private List<Employee> employees;
+}
+```
+*   当访问第一个部门的员工时，JPA 会一次性加载 20 个部门的员工数据，后续 19 次访问将直接从缓存获取。将 N+1 变成了 (1 + N/20) 次查询。
+
+#### 4.3 查询结果返回 DTO
+
+**4.3.1 为什么需要 DTO？**
+
+1.  **API 视图定制：** API 只暴露需要的数据，隐藏内部实现细节。
+2.  **性能优化：** 只查询数据库中需要的列，减少网络传输和内存占用。
+3.  **避免循环引用：** 在双向关联中，直接返回实体可能导致 JSON 序列化死循环。
+4.  **解耦：** 表现层与持久层的解耦。
+
+**4.3.2 JPQL 构造函数表达式**
+
+*   在 JPQL 中使用 `NEW` 操作符直接构造 DTO 对象。
+
+```java
+// 1. DTO 类，必须有对应的构造函数
+public class EmployeeDto {
+    private String name;
+    private String departmentName;
+
+    public EmployeeDto(String name, String departmentName) {
+        this.name = name;
+        this.departmentName = departmentName;
+    }
+    // getters
+}
+
+// 2. Repository 方法
+public interface EmployeeRepository extends JpaRepository<Employee, Long> {
+    @Query("SELECT NEW com.example.jpademo.dto.EmployeeDto(e.name, e.department.name) " +
+           "FROM Employee e WHERE e.id = :id")
+    Optional<EmployeeDto> findEmployeeDtoById(@Param("id") Long id);
+}
+```
+
+**4.3.3 接口投影 (Interface-based Projections)**
+
+*   定义一个接口，其中包含需要查询的属性的 `getter` 方法。
+
+```java
+// 1. 投影接口
+public interface EmployeeSummary {
+    String getName();
+    String getDepartmentName(); // JPA 会自动处理关联属性 e.department.name
+}
+
+// 2. Repository 方法
+public interface EmployeeRepository extends JpaRepository<Employee, Long> {
+    List<EmployeeSummary> findByStatus(EmployeeStatus status);
+}
+```
+*   **优点：** 无需创建 DTO 类，非常简洁。
+*   **动态投影：** 可以通过泛型在运行时决定返回哪种投影。
+    ` <T> List<T> findByStatus(EmployeeStatus status, Class<T> type);`
+
+**4.3.4 Class-based Projections (DTOs)**
+
+*   与接口投影类似，但使用 DTO 类。DTO 类必须有构造函数或标准的 setter 方法。
+*   如果使用构造函数，其参数名必须与实体属性名匹配。
+
+```java
+// 1. DTO 类
+public class EmployeeSummaryDto {
+    private String name;
+    private String departmentName;
+    // getters and setters
+}
+
+// 2. Repository 方法
+public interface EmployeeRepository extends JpaRepository<Employee, Long> {
+    List<EmployeeSummaryDto> findByStatus(EmployeeStatus status);
+}
+```
+
+#### 4.4 复杂统计与分组查询
+
+**4.4.1 JPQL 聚合函数**
+
+*   `COUNT()`: 计数
+*   `SUM()`: 求和
+*   `AVG()`: 平均值
+*   `MAX()`: 最大值
+*   `MIN()`: 最小值
+
+**4.4.2 `GROUP BY` 和 `HAVING`**
+
+*   **`GROUP BY`**: 按指定字段对结果进行分组。
+*   **`HAVING`**: 对分组后的结果进行过滤。
+
+**案例：按部门统计员工人数和平均薪资**
+
+```java
+// 1. 创建结果 DTO
+public class DepartmentStats {
+    private String departmentName;
+    private long employeeCount;
+    private double averageSalary;
+
+    public DepartmentStats(String departmentName, long employeeCount, double averageSalary) {
+        this.departmentName = departmentName;
+        this.employeeCount = employeeCount;
+        this.averageSalary = averageSalary;
+    }
+    // getters
+}
+
+// 2. Repository 方法
+public interface DepartmentRepository extends JpaRepository<Department, Long> {
+    @Query("SELECT NEW com.example.jpademo.dto.DepartmentStats(" +
+           "   d.name, " +
+           "   COUNT(e.id), " +
+           "   AVG(e.salary)" +
+           ") " +
+           "FROM Department d JOIN d.employees e " +
+           "GROUP BY d.name " +
+           "HAVING COUNT(e.id) > :minEmployeeCount " +
+           "ORDER BY COUNT(e.id) DESC")
+    List<DepartmentStats> getDepartmentStats(@Param("minEmployeeCount") long minEmployeeCount);
+}
+```
+
+#### 4.5 处理 JSON/JSONB 字段 (以 PostgreSQL 为例)
+
+**4.5.1 为什么需要特殊处理**
+
+*   JPA 标准本身不直接支持 JSON 类型。需要借助 JPA 实现（Hibernate）的扩展或第三方库。
+
+**4.5.2 使用 `hypersistence-utils` 库**
+
+*   这是一个强大的第三方库，极大地简化了 Hibernate 对 JSON、数组等高级类型的处理。
+
+**1. 添加依赖**
+```xml
+<dependency>
+    <groupId>io.hypersistence</groupId>
+    <artifactId>hypersistence-utils-hibernate-62</artifactId> <!-- 版本号对应 Hibernate 版本 -->
+    <version>3.7.0</version>
+</dependency>
+```
+
+**2. 在实体中使用 `@Type` 注解**
+```java
+import io.hypersistence.utils.hibernate.type.json.JsonType;
+import org.hibernate.annotations.Type;
+
+@Entity
+@Table(name = "events")
+public class Event {
+    @Id
+    private Long id;
+
+    @Type(JsonType.class) // 告诉 Hibernate 使用 JsonType 来处理这个字段
+    @Column(columnDefinition = "jsonb") // 指定数据库列类型为 jsonb
+    private Map<String, Object> properties;
+    // ...
+}
+```
+*   现在，你可以像操作普通 `Map` 一样读写 `properties` 字段，`hypersistence-utils` 会自动处理 Java Map 和数据库 JSON 之间的转换。
+
+**4.5.3 在原生 SQL 中查询 JSON 字段**
+
+*   对于复杂的 JSON 查询（如查询嵌套 Key），通常需要使用原生 SQL。
+
+```java
+public interface EventRepository extends JpaRepository<Event, Long> {
+
+    // 查询 properties 字段中 'source' key 的值为 'mobile' 的事件
+    @Query(
+        value = "SELECT * FROM events WHERE properties ->> 'source' = :source",
+        nativeQuery = true
+    )
+    List<Event> findEventsBySource(@Param("source") String source);
+
+    // 查询 properties 字段中 'details' -> 'code' 的值大于 100 的事件
+    @Query(
+        value = "SELECT * FROM events WHERE (properties -> 'details' ->> 'code')::int > :code",
+        nativeQuery = true
+    )
+    List<Event> findEventsByDetailCodeGreaterThan(@Param("code") int code);
+}
+```
+*   **`->`**: 操作符返回 JSON 对象。
+*   **`->>`**: 操作符返回文本。
+*   **`::int`**: PostgreSQL 的类型转换语法。
 
 ##### 第五部分：实战与最佳实践 (1h)
 
