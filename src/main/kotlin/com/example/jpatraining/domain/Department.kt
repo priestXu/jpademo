@@ -41,6 +41,16 @@ data class Department @JvmOverloads constructor(
     @JsonManagedReference // 用于序列化时避免递归
     val employees: MutableList<Employee> = mutableListOf(),
 
+    /**
+     * 多对一关系：一个部门属于一个公司。
+     * `fetch = FetchType.LAZY` 表示延迟加载，只有在需要时才加载公司信息。
+     * `@JsonBackReference` 用于序列化时避免递归引用。
+     * 这意味着在 JSON 序列化时，`company` 字段不会被序列化，
+     * 但在反序列化时仍然可以使用。
+     * 这有助于避免循环引用问题。
+     * 如果需要在 JSON 中包含公司信息，可以使用 `@JsonManagedReference` 在
+     * `Company` 类中标记相应的字段。
+     */
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "company_id")
     @JsonBackReference
