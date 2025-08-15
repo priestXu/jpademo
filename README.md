@@ -64,54 +64,51 @@ The OpenAPI specification is available at:
 
 [http://localhost:8080/api-docs](http://localhost:8080/api-docs)
 
-## Query Examples
+## Query Examples (cURL)
 
-1.  **Method Name Query:**
-    *   Find employees by name.
-    *   `EmployeeRepository.findByName(name: String): List<Employee>`
+Here are some examples of how to query the API using cURL.
 
-2.  **@Query with JPQL:**
-    *   Find employees by department name.
-    *   `EmployeeRepository.findByDepartmentName(departmentName: String): List<Employee>`
+### 1. Get Paged List of Employees
+Fetches the first page of employees, with 5 items per page, sorted by name in ascending order.
+```bash
+curl -X GET "http://localhost:8080/api/employees?page=0&size=5&sort=name,asc"
+```
 
-3.  **@Query with Native SQL:**
-    *   Find employees by a partial match on the name using a native query.
-    *   `EmployeeRepository.findByNameContaining(name: String): List<Employee>`
+### 2. Dynamic Employee Search
+Searches for employees with "a" in their name, in the "Engineering" department, and with a salary greater than 60000.
+```bash
+curl -X GET "http://localhost:8080/api/employees/search?name=a&department=Engineering&minSalary=60000"
+```
 
-4.  **Specification for Dynamic Queries:**
-    *   Dynamically search for employees based on multiple criteria (e.g., name, department).
-    *   `EmployeeSpecifications.kt`
+### 3. Get Department Salary Statistics
+Fetches aggregated salary statistics (average, max, min) for each department.
+```bash
+curl -X GET "http://localhost:8080/api/employees/stats/salary-by-department"
+```
 
-5.  **Query by Example (QBE):**
-    *   Find employees by an example object.
-    *   `EmployeeService.findByExample(employee: Employee): List<Employee>`
+### 4. Find Companies by Industry (JSONB Query)
+Finds companies in the "Technology" industry. This query targets a `jsonb` field in the database.
+```bash
+curl -X GET "http://localhost:8080/api/companies/search/industry/0?industry=Technology"
+```
 
-6.  **Paging and Sorting:**
-    *   Get a paginated and sorted list of employees.
-    *   `EmployeeController.getPagedEmployees(...)`
+### 5. Complex Join - Get Employee Details
+Fetches detailed information for employees whose name contains "Doe" and work for a company whose name contains "Solutions". This demonstrates a complex, multi-table join.
+```bash
+curl -X GET "http://localhost:8080/api/employees/details?employeeName=Doe&companyName=Solutions&page=0&size=10"
+```
 
-7.  **JPQL Constructor Expression (DTO):**
-    *   Get a list of employees with only their name and department name.
-    *   `EmployeeRepository.findEmployeeWithDepartmentDtos(): List<EmployeeWithDepartmentDto>`
-
-8.  **Interface-based Projection:**
-    *   Get a simplified view of employees.
-    *   `EmployeeRepository.findByName(name: String, type: Class<T>): List<T>`
-
-9.  **Group By and Aggregation:**
-    *   Get salary statistics by department.
-    *   `EmployeeRepository.findDepartmentSalaryStats(): List<DepartmentSalaryStats>`
-
-10. **Criteria API for DTO Projection:**
-    *   Get a list of employees with department information using Criteria API.
-    *   `EmployeeService.findEmployeesWithDepartmentUsingCriteria()`
-
-11. **Criteria API for Complex Dynamic Queries:**
-    *   Search for employees with multiple optional criteria using Criteria API.
-    *   `EmployeeService.searchEmployees(...)`
-
-12. **CriteriaBuilder for Complex Multi-table Joins:**
-    *   **Description:** Fetches a list of employees with their department and company information. This example demonstrates a type-safe way to perform complex joins and map the result to a custom DTO.
-    *   **DTO:** `EmployeeDetailsDto.kt`
-    *   **Service Method:** `EmployeeService.findEmployeeDetails(employeeName: String?, companyName: String?): List<EmployeeDetailsDto>`
-    *   **Controller Endpoint:** `GET /api/employees/details`
+### 6. Create a New Employee
+```bash
+curl -X POST "http://localhost:8080/api/employees" 
+-H "Content-Type: application/json" 
+-d 
+'{
+  "name": "John Doe",
+  "email": "john.doe@example.com",
+  "salary": 75000,
+  "department": {
+    "id": 1
+  }
+}'
+```

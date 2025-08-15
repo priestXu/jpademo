@@ -64,54 +64,50 @@ OpenAPI 规范位于：
 
 [http://localhost:8080/api-docs](http://localhost:8080/api-docs)
 
-## 查询示例
+## 查询示例 (cURL)
 
-1.  **方法名查询:**
-    *   根据姓名查找员工。
-    *   `EmployeeRepository.findByName(name: String): List<Employee>`
+这里有一些如何使用 cURL 查询 API 的示例。
 
-2.  **使用 JPQL 的 @Query 查询:**
-    *   根据部门名称查找员工。
-    *   `EmployeeRepository.findByDepartmentName(departmentName: String): List<Employee>`
+### 1. 获取分页的员工列表
+获取第一页的员工数据，每页包含 5 个条目，并按姓名升序排序。
+```bash
+curl -X GET "http://localhost:8080/api/employees?page=0&size=5&sort=name,asc"
+```
 
-3.  **使用原生 SQL 的 @Query 查询:**
-    *   使用原生查询根据姓名模糊匹配查找员工。
-    *   `EmployeeRepository.findByNameContaining(name: String): List<Employee>`
+### 2. 动态员工搜索
+搜索姓名中包含 "a"、在 "Engineering" 部门、且薪水高于 60000 的员工。
+```bash
+curl -X GET "http://localhost:8080/api/employees/search?name=a&department=Engineering&minSalary=60000"
+```
 
-4.  **Specification 动态查询:**
-    *   根据多个条件（如姓名、部门）动态搜索员工。
-    *   `EmployeeSpecifications.kt`
+### 3. 获取部门薪资统计
+获取每个部门的薪资聚合统计信息（平均值、最大值、最小值）。
+```bash
+curl -X GET "http://localhost:8080/api/employees/stats/salary-by-department"
+```
 
-5.  **示例查询 (QBE):**
-    *   根据示例对象查找员工。
-    *   `EmployeeService.findByExample(employee: Employee): List<Employee>`
+### 4. 按行业查找公司 (JSONB 查询)
+查找 "Technology" 行业的公司。此查询针对数据库中的 `jsonb` 类型字段。
+```bash
+curl -X GET "http://localhost:8080/api/companies/search/industry/0?industry=Technology"
+```
 
-6.  **分页和排序:**
-    *   获取分页和排序的员工列表。
-    *   `EmployeeController.getPagedEmployees(...)`
+### 5. 复杂连接 - 获取员工详细信息
+获取姓名包含 "Doe" 且所在公司名称包含 "Solutions" 的员工的详细信息。这个例子演示了复杂的多表连接查询。
+```bash
+curl -X GET "http://localhost:8080/api/employees/details?employeeName=Doe&companyName=Solutions&page=0&size=10"
+```
 
-7.  **JPQL 构造函数表达式 (DTO):**
-    *   获取只包含姓名和部门名称的员工列表。
-    *   `EmployeeRepository.findEmployeeWithDepartmentDtos(): List<EmployeeWithDepartmentDto>`
-
-8.  **基于接口的投影:**
-    *   获取员工的简化视图。
-    *   `EmployeeRepository.findByName(name: String, type: Class<T>): List<T>`
-
-9.  **分组和聚合:**
-    *   按部门统计薪资信息。
-    *   `EmployeeRepository.findDepartmentSalaryStats(): List<DepartmentSalaryStats>`
-
-10. **Criteria API DTO 投影:**
-    *   使用 Criteria API 获取包含部门信息的员工列表。
-    *   `EmployeeService.findEmployeesWithDepartmentUsingCriteria()`
-
-11. **Criteria API 复杂动态查询:**
-    *   使用 Criteria API 根据多个可选条件搜索员工。
-    *   `EmployeeService.searchEmployees(...)`
-
-12. **使用 CriteriaBuilder 进行复杂多表连接:**
-    *   **描述:** 获取包含部门和公司信息的员工列表。此示例演示了如何以类型安全的方式执行复杂连接并将结果映射到自定义 DTO。
-    *   **DTO:** `EmployeeDetailsDto.kt`
-    *   **服务层方法:** `EmployeeService.findEmployeeDetails(employeeName: String?, companyName: String?): List<EmployeeDetailsDto>`
-    *   **控制器端点:** `GET /api/employees/details`
+### 6. 创建一个新员工
+```bash
+curl -X POST "http://localhost:8080/api/employees" \
+-H "Content-Type: application/json" \
+-d '{
+  "name": "张三",
+  "email": "zhang.san@example.com",
+  "salary": 75000,
+  "department": {
+    "id": 1
+  }
+}'
+```
